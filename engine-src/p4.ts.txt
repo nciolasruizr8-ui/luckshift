@@ -1,0 +1,160 @@
+      pushHud(true);
+    }
+    spin += dt * 0.8;
+    playerX = VW / 2 + Math.sin(time * 0.7) * 18;
+    if (Math.random() < dt * 14) {
+      const p = particles.find((item) => !item.alive);
+      if (p) {
+        p.alive = true;
+        p.x = 36 + Math.random() * (VW - 72);
+        p.y = 20 + Math.random() * (VH - 40);
+        p.vx = (Math.random() - 0.5) * 12;
+        p.vy = 16 + Math.random() * 22;
+        p.life = p.max = 1.1 + Math.random() * 0.6;
+        p.size = 1.4 + Math.random() * 1.6;
+        p.color = Math.random() < 0.5 ? AMBER : TEAL;
+      }
+    }
+  }
+
+  function updatePresentation(dt: number) {
+    trauma = Math.max(0, trauma - dt * 1.7);
+    flash = Math.max(0, flash - dt * 1.8);
+    pop = Math.max(0, pop - dt * 4.5);
+    lockPulse = Math.max(0, lockPulse - dt * 1.15);
+    for (const p of particles) {
+      if (!p.alive) continue;
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.alive = false;
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 40 * dt;
+      p.vx *= 1 - Math.min(1, dt * 1.4);
+    }
+    for (let i = floaters.length - 1; i >= 0; i--) {
+      const f = floaters[i]!;
+      f.life -= dt;
+      f.y -= 36 * dt;
+      if (f.life <= 0) floaters.splice(i, 1);
+    }
+  }
+
+  function measure() {
+    const rect = canvas.getBoundingClientRect();
+    const cssW = Math.max(1, rect.width);
+    const cssH = Math.max(1, rect.height);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const bw = Math.round(cssW * dpr);
+    const bh = Math.round(cssH * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+    }
+    const scale = Math.min(cssW / VW, cssH / VH);
+    layout = {
+      scale,
+      ox: (cssW - VW * scale) / 2,
+      oy: (cssH - VH * scale) / 2,
+      cssW,
+      cssH,
+    };
+    return dpr;
+  }
+
+  function virtualX(clientX: number) {
+    const rect = canvas.getBoundingClientRect();
+    const cssX = clientX - rect.left;
+    return (cssX - layout.ox) / layout.scale;
+  }
+
+  function drawDie(x: number, y: number, size: number, pip: number | null, alpha: number) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(spin);
+    const stretch = clamp(Math.abs(playerVx) / 520, 0, 0.16);
+    const squash = 1 + pop * 0.14;
+    ctx.scale((1 + stretch) * squash, (1 - stretch * 0.65) * squash);
+    ctx.globalAlpha = alpha;
+    const s = size;
+    const grd = ctx.createLinearGradient(-s, -s, s, s);
+    grd.addColorStop(0, "#f0c36a");
+    grd.addColorStop(1, "#c4842a");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.roundRect(-s, -s, s * 2, s * 2, s * 0.38);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(16,22,20,0.35)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    if (pip === null) {
+      ctx.globalAlpha = alpha * 0.8;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.arc(i * s * 0.28, 0, s * 0.16, 0.2, Math.PI - 0.2);
+        ctx.stroke();
+      }
+    } else {
+      drawPips(pip, s * 0.62);
+    }
+    ctx.restore();
+  }
+
+  function drawPips(n: number, r: number) {
+    const spots: Record<number, Array<[number, number]>> = {
+      1: [[0, 0]],
+      2: [[-0.55, -0.55], [0.55, 0.55]],
+      3: [[-0.6, -0.6], [0, 0], [0.6, 0.6]],
+      4: [[-0.55, -0.55], [0.55, -0.55], [-0.55, 0.55], [0.55, 0.55]],
+      5: [[-0.58, -0.58], [0.58, -0.58], [0, 0], [-0.58, 0.58], [0.58, 0.58]],
+      6: [[-0.58, -0.62], [0.58, -0.62], [-0.58, 0], [0.58, 0], [-0.58, 0.62], [0.58, 0.62]],
+    };
+    const list = spots[n] ?? spots[1]!;
+    for (const [px, py] of list) {
+      ctx.beginPath();
+      ctx.arc(px * r, py * r, Math.max(2.2, r * 0.16), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function render() {
+    const dpr = measure();
+    const { scale, ox, oy, cssW, cssH } = layout;
+    const mag = shakeOn ? trauma * trauma * 12 : 0;
+    const sx = Math.sin(time * 41) * mag;
+    const sy = Math.cos(time * 33) * mag * 0.8;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = INK;
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * (ox + sx), dpr * (oy + sy));
+
+    ctx.fillStyle = SHAFT;
+    ctx.beginPath();
+    ctx.roundRect(10, 8, VW - 20, VH - 16, 26);
+    ctx.fill();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(10, 8, VW - 20, VH - 16, 26);
+    ctx.clip();
+
+    const shift = distance * 0.45 + time * 18;
+    ctx.strokeStyle = "rgba(239,231,214,0.055)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 14; i++) {
+      const y = ((i * 64 - (shift % 64)) + 128) % (VH + 64) - 32;
+      ctx.beginPath();
+      ctx.moveTo(28, y);
+      ctx.lineTo(VW - 28, y);
+      ctx.stroke();
+    }
+
+    const edge = face().score > 1 && phase === "play" ? "rgba(225,90,69,0.45)" : "rgba(230,162,60,0.28)";
+    ctx.strokeStyle = edge;
