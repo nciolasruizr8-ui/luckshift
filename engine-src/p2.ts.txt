@@ -1,0 +1,174 @@
+    let left = n;
+    for (const p of particles) {
+      if (left <= 0) break;
+      if (p.alive) continue;
+      const a = Math.random() * Math.PI * 2;
+      const s = speed * (0.35 + Math.random() * 0.85);
+      p.alive = true;
+      p.x = x;
+      p.y = y;
+      p.vx = Math.cos(a) * s;
+      p.vy = Math.sin(a) * s;
+      p.life = p.max = 0.28 + Math.random() * 0.38;
+      p.size = 1.6 + Math.random() * 2.8;
+      p.color = color;
+      left -= 1;
+    }
+  }
+
+  function kill() {
+    if (dying > 0 || phase !== "play") return;
+    dying = 0.45;
+    hitstop = 0.09;
+    trauma = Math.min(1, trauma + 0.85);
+    flash = 0.85;
+    burst(playerX, PLAYER_Y, CORAL, 28, 220);
+    burst(playerX, PLAYER_Y, PAPER, 12, 120);
+    audio.thud();
+    audio.duck();
+  }
+
+  function finishDeath() {
+    phase = "dead";
+    const finalScore = Math.floor(score);
+    newBest = finalScore > best;
+    if (newBest) {
+      best = finalScore;
+      save.best = best;
+      writeSave(save);
+    }
+    pushHud(true);
+  }
+
+  function lockFace(next: number) {
+    faceIndex = next;
+    rolling = false;
+    timerMax = 6.6;
+    timer = timerMax;
+    lockPulse = 1;
+    pop = 1;
+    const f = face();
+    audio.lock();
+    if (f.ward) {
+      if (ward) addScore(40, "ward");
+      ward = true;
+    }
+    floaters.push({
+      x: VW / 2,
+      y: 168,
+      text: f.name,
+      life: 0.9,
+      max: 0.9,
+      color: f.score > 1 ? CORAL : AMBER,
+    });
+  }
+
+  function beginRoll() {
+    rolling = true;
+    timerMax = 0.85;
+    timer = timerMax;
+    audio.ticks();
+  }
+
+  function pickNextFace() {
+    let next = Math.floor(Math.random() * 6);
+    if (next === faceIndex) next = (next + 1 + Math.floor(Math.random() * 5)) % 6;
+    return next;
+  }
+
+  function updateFace(dt: number) {
+    timer -= dt;
+    if (timer > 0) return;
+    if (!rolling) beginRoll();
+    else lockFace(pickNextFace());
+  }
+
+  function axis() {
+    if (steerInject !== null && injected === null) return clamp(steerInject, -1, 1);
+    let a = 0;
+    if (held("KeyA") || held("ArrowLeft")) a -= 1;
+    if (held("KeyD") || held("ArrowRight")) a += 1;
+    const pad = padAxis();
+    if (Math.abs(pad) > Math.abs(a)) a = pad;
+    return clamp(a, -1, 1);
+  }
+
+  function updatePlayer(dt: number) {
+    const prev = playerX;
+    if (pointerId !== null) {
+      const tx = clamp(pointerX, 22, VW - 22);
+      playerX += (tx - playerX) * (1 - Math.exp(-16 * dt));
+    } else {
+      playerX += axis() * moveSpeed() * dt;
+    }
+    playerX = clamp(playerX, 22, VW - 22);
+    playerVx = (playerX - prev) / Math.max(dt, 0.0001);
+    const tumble = rolling ? 11 : 1.4;
+    spin += dt * tumble + playerVx * 0.0022;
+  }
+
+  function updateEcho(dt: number) {
+    echoTick -= dt;
+    if (echoTick <= 0) {
+      echoTick = 0.028;
+      echo.shift();
+      echo.push(playerX);
+    }
+  }
+
+  function spawnSpacing(diff: number) {
+    return lerp(310, 178, diff);
+  }
+
+  function reachOf(diff: number) {
+    const scroll = Math.max(40, (198 + diff * 210) * face().scroll);
+    return moveSpeed() * (spawnSpacing(diff) / scroll) * 0.7;
+  }
+
+  function pushBar(x: number, y: number, w: number, h: number) {
+    if (w < 10) return;
+    hazards.push({ kind: "bar", x, y, w, h, alive: true, checked: false });
+  }
+
+  function spawnGate(y: number, diff: number) {
+    const gap = lerp(176, 112, diff);
+    const reach = reachOf(diff);
+    let cx = safeX + (Math.random() * 2 - 1) * reach;
+    cx = clamp(cx, gap / 2 + 8, VW - gap / 2 - 8);
+    safeX = cx;
+    const leftW = cx - gap / 2;
+    const rightX = cx + gap / 2;
+    pushBar(0, y, leftW, 24);
+    pushBar(rightX, y, VW - rightX, 24);
+    if (Math.random() < 0.7) {
+      gemList.push({ x: cx, y: y - 36, alive: true, spin: Math.random() * 6 });
+    }
+  }
+
+  function spawnBlock(y: number, diff: number) {
+    const w = lerp(86, 148, diff);
+    const reach = reachOf(diff);
+    let openX = clamp(safeX + (Math.random() * 2 - 1) * reach, 46, VW - 46);
+    let x = openX < VW / 2 ? openX + 54 : openX - 54 - w;
+    x = clamp(x, 0, VW - w);
+    if (openX > x - 8 && openX < x + w + 8) {
+      x = openX < VW / 2 ? Math.min(VW - w, openX + 50) : Math.max(0, openX - 50 - w);
+    }
+    pushBar(x, y, w, 26);
+    if (openX < x) safeX = clamp((0 + x) / 2, 30, VW - 30);
+    else safeX = clamp((x + w + VW) / 2, 30, VW - 30);
+    if (Math.abs(safeX - openX) > reach) safeX = openX;
+    if (Math.random() < 0.55) {
+      gemList.push({ x: safeX, y: y - 34, alive: true, spin: 0 });
+    }
+  }
+
+  function spawnChips(y: number, diff: number) {
+    const reach = reachOf(diff);
+    const origin = clamp(safeX + (Math.random() * 2 - 1) * reach * 0.45, 70, VW - 70);
+    const skip = Math.floor(Math.random() * 3);
+    const offsets = [-62, 0, 62];
+    for (let i = 0; i < offsets.length; i++) {
+      if (i === skip) continue;
+      const x = origin + offsets[i]!;
+      if (x < 20 || x > VW - 20) continue;

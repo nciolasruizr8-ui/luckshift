@@ -1,0 +1,221 @@
+  let ward = false;
+  let invuln = 0;
+  let score = 0;
+  let combo = 0;
+  let comboT = 0;
+  let gems = 0;
+  let nears = 0;
+  let seconds = 0;
+  let distance = 0;
+  let scrollMeter = 0;
+  let safeX = VW / 2;
+  let newBest = false;
+  let best = save.best;
+  let soundOn = save.sound;
+  let shakeOn = save.shake;
+  let titleT = 0;
+  let preview = 0;
+  let hitstop = 0;
+  let trauma = 0;
+  let flash = 0;
+  let pop = 0;
+  let lockPulse = 0;
+  let hint = 3.2;
+  let dying = 0;
+  let time = 0;
+  let runT = 0;
+  let acc = 0;
+  let last = performance.now();
+  let stopped = false;
+  let lastHudKey = "";
+  let raf = 0;
+  const echo: number[] = Array.from({ length: 14 }, () => VW / 2);
+  let echoTick = 0;
+
+  const hazards: Hazard[] = [];
+  const gemList: Gem[] = [];
+  const floaters: Floater[] = [];
+  const particles: Particle[] = Array.from({ length: 180 }, () => ({
+    alive: false,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    life: 0,
+    max: 1,
+    size: 2,
+    color: PAPER,
+  }));
+
+  const audio = createMixer();
+
+  function face() {
+    return FACES[faceIndex]!;
+  }
+
+  function difficulty() {
+    return clamp(distance / 7600, 0, 1);
+  }
+
+  function scrollSpeed() {
+    const d = difficulty();
+    return (198 + d * 210) * face().scroll;
+  }
+
+  function moveSpeed() {
+    return 336 * face().move;
+  }
+
+  function held(code: string) {
+    if (injected) return injected.includes(code);
+    return keys.has(code);
+  }
+
+  function snapshot(): Hud {
+    const show = phase === "title" ? FACES[preview]! : face();
+    return {
+      phase,
+      score: Math.floor(score),
+      best: Math.floor(best),
+      combo,
+      face: show.id,
+      faceName: phase !== "title" && rolling ? "Rolling" : show.name,
+      faceBlurb: phase !== "title" && rolling ? "The die is in the air" : show.blurb,
+      faceT: phase === "title" ? 1 : clamp(timer / timerMax, 0, 1),
+      rolling: phase !== "title" && rolling,
+      ward,
+      gems,
+      nears,
+      seconds: Math.floor(seconds),
+      sound: soundOn,
+      shake: shakeOn,
+      newBest,
+    };
+  }
+
+  function pushHud(force = false) {
+    const snap = snapshot();
+    const key = [
+      snap.phase,
+      snap.score,
+      snap.best,
+      snap.combo,
+      snap.face,
+      snap.faceName,
+      Math.round(snap.faceT * 24),
+      snap.ward ? 1 : 0,
+      snap.gems,
+      snap.nears,
+      snap.seconds,
+      snap.sound ? 1 : 0,
+      snap.shake ? 1 : 0,
+      snap.newBest ? 1 : 0,
+    ].join("|");
+    if (!force && key === lastHudKey) return;
+    lastHudKey = key;
+    if (!stopped) emit(snap);
+  }
+
+  function resetRun() {
+    playerX = VW / 2;
+    playerVx = 0;
+    spin = 0.2;
+    faceIndex = 0;
+    rolling = false;
+    timer = 5.2;
+    timerMax = 5.2;
+    ward = false;
+    invuln = 0;
+    score = 0;
+    combo = 0;
+    comboT = 0;
+    gems = 0;
+    nears = 0;
+    seconds = 0;
+    distance = 0;
+    scrollMeter = 140;
+    safeX = VW / 2;
+    newBest = false;
+    hitstop = 0;
+    trauma = 0;
+    flash = 0;
+    pop = 0;
+    lockPulse = 0;
+    hint = 3.4;
+    dying = 0;
+    runT = 0;
+    echo.fill(VW / 2);
+    hazards.length = 0;
+    gemList.length = 0;
+    floaters.length = 0;
+    for (const p of particles) p.alive = false;
+  }
+
+  function start() {
+    audio.unlock();
+    audio.setMuted(!soundOn);
+    if (phase === "play" && dying <= 0) return;
+    resetRun();
+    phase = "play";
+    audio.startMusic();
+    audio.tone(220, 0.08, "sine", 0.05);
+    audio.tone(440, 0.12, "triangle", 0.04, 660);
+    pushHud(true);
+  }
+
+  function togglePause() {
+    audio.unlock();
+    if (phase === "play") {
+      phase = "pause";
+      audio.duck();
+      pushHud(true);
+      return;
+    }
+    if (phase === "pause") {
+      phase = "play";
+      audio.startMusic();
+      last = performance.now();
+      pushHud(true);
+    }
+  }
+
+  function toggleSound() {
+    audio.unlock();
+    soundOn = !soundOn;
+    save.sound = soundOn;
+    writeSave(save);
+    audio.setMuted(!soundOn);
+    if (soundOn && (phase === "play" || phase === "title")) audio.startMusic();
+    pushHud(true);
+  }
+
+  function toggleShake() {
+    shakeOn = !shakeOn;
+    save.shake = shakeOn;
+    writeSave(save);
+    if (!shakeOn) trauma = 0;
+    pushHud(true);
+  }
+
+  function addScore(base: number, style: "points" | "smash" | "close" | "ward") {
+    const gained = Math.max(1, Math.round(base * (1 + combo * 0.1) * face().score));
+    score += gained;
+    const text =
+      style === "points" ? `+${gained}` : style === "ward" ? "stacked" : style;
+    const color = style === "close" ? PAPER : style === "smash" ? AMBER : TEAL;
+    floaters.push({
+      x: playerX + (Math.random() * 24 - 12),
+      y: PLAYER_Y - 28,
+      text,
+      life: 0.7,
+      max: 0.7,
+      color,
+    });
+  }
+
+  function bumpCombo() {
+    combo = Math.min(24, combo + 1);
+    comboT = 2.35;
+  }
+
+  function burst(x: number, y: number, color: string, n: number, speed: number) {
