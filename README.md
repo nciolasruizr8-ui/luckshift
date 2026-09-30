@@ -22,7 +22,11 @@ npm install
 npm run dev
 ```
 
+`npm run dev`, `npm run typecheck`, and `npm run build` join `engine-src/p0.ts.txt` through `p7.ts.txt` into `src/game/engine.ts` before Vite or TypeScript run.
+
 ## GitHub Actions
 
 - `ci` typechecks and builds on every push and pull request.
 - `pages` publishes the build to GitHub Pages from `main`.
+
+After the Pages workflow succeeds, the game is at <https://nciolasruizr8-ui.github.io/luckshift/>. The first deploy needs GitHub Pages set to **GitHub Actions** under Settings → Pages.

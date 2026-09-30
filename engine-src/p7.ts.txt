@@ -1,0 +1,138 @@
+    if (ctx) return;
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return;
+    ctx = new AC({ latencyHint: "interactive" });
+    master = ctx.createGain();
+    sfx = ctx.createGain();
+    music = ctx.createGain();
+    sfx.gain.value = 0.9;
+    music.gain.value = 0.55;
+    master.gain.value = 0.8;
+    sfx.connect(master);
+    music.connect(master);
+    master.connect(ctx.destination);
+  }
+
+  function envGain(bus: GainNode, peak: number, when: number, dur: number) {
+    const g = ctx!.createGain();
+    g.connect(bus);
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), when + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    return g;
+  }
+
+  return {
+    unlock() {
+      ensure();
+      if (ctx && ctx.state === "suspended") void ctx.resume();
+    },
+    setMuted(muted: boolean) {
+      if (!ctx || !master) return;
+      master.gain.setTargetAtTime(muted ? 0.0001 : 0.8, ctx.currentTime, 0.02);
+    },
+    startMusic() {
+      musicOn = true;
+      if (ctx) nextAt = Math.max(nextAt, ctx.currentTime + 0.05);
+    },
+    duck() {
+      musicOn = false;
+    },
+    stop() {
+      musicOn = false;
+      if (ctx) void ctx.close();
+      ctx = null;
+    },
+    tone(freq: number, dur: number, type: OscillatorType, peak: number, slideTo?: number) {
+      if (!ctx || !sfx) return;
+      const when = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, when);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(40, slideTo), when + dur);
+      const g = envGain(sfx, peak, when, dur);
+      o.connect(g);
+      o.start(when);
+      o.stop(when + dur + 0.02);
+    },
+    blip(from: number, to: number, dur: number, peak: number) {
+      if (!ctx || !sfx) return;
+      const when = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = "triangle";
+      const rate = 1 + (Math.random() * 0.12 - 0.06);
+      o.frequency.setValueAtTime(from * rate, when);
+      o.frequency.exponentialRampToValueAtTime(Math.max(40, to * rate), when + dur);
+      const g = envGain(sfx, peak * (0.9 + Math.random() * 0.2), when, dur);
+      o.connect(g);
+      o.start(when);
+      o.stop(when + dur + 0.02);
+    },
+    ticks() {
+      this.blip(480, 240, 0.05, 0.03);
+      window.setTimeout(() => this.blip(620, 300, 0.05, 0.03), 90);
+    },
+    lock() {
+      this.tone(330, 0.12, "triangle", 0.05, 520);
+    },
+    ward() {
+      this.tone(180, 0.16, "sine", 0.08, 90);
+      this.blip(540, 760, 0.1, 0.04);
+    },
+    thud() {
+      if (!ctx || !sfx) return;
+      const when = ctx.currentTime;
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.setValueAtTime(140, when);
+      o.frequency.exponentialRampToValueAtTime(42, when + 0.28);
+      const g = envGain(sfx, 0.12, when, 0.3);
+      o.connect(g);
+      o.start(when);
+      o.stop(when + 0.32);
+      const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.15), ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+      const n = ctx.createBufferSource();
+      n.buffer = buffer;
+      const ng = envGain(sfx, 0.08, when, 0.15);
+      n.connect(ng);
+      n.start(when);
+    },
+    tick(run: boolean) {
+      if (!ctx || !music || !run || !musicOn) return;
+      const look = ctx.currentTime + 0.18;
+      const beat = 0.34;
+      while (nextAt < look) {
+        const freq = notes[step % notes.length]!;
+        const o = ctx.createOscillator();
+        o.type = "sine";
+        o.frequency.setValueAtTime(freq, nextAt);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, nextAt);
+        g.gain.exponentialRampToValueAtTime(0.045, nextAt + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, nextAt + 0.28);
+        o.connect(g);
+        g.connect(music);
+        o.start(nextAt);
+        o.stop(nextAt + 0.3);
+        if (step % 2 === 1) {
+          const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.03), ctx.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+          const n = ctx.createBufferSource();
+          n.buffer = buffer;
+          const ng = ctx.createGain();
+          ng.gain.setValueAtTime(0.03, nextAt);
+          n.connect(ng);
+          ng.connect(music);
+          n.start(nextAt);
+        }
+        step += 1;
+        nextAt += beat;
+      }
+    },
+  };
+}
