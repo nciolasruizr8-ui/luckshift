@@ -1,0 +1,177 @@
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    e.preventDefault();
+    audio.unlock();
+    if (phase === "title" || phase === "dead") {
+      start();
+      pointerId = e.pointerId;
+      pointerX = virtualX(e.clientX);
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (phase !== "play") return;
+    pointerId = e.pointerId;
+    pointerX = virtualX(e.clientX);
+    canvas.setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (e.pointerId !== pointerId) return;
+    pointerX = virtualX(e.clientX);
+  }
+
+  function onPointerUp(e: PointerEvent) {
+    if (e.pointerId !== pointerId) return;
+    pointerId = null;
+  }
+
+  function onVis() {
+    if (document.hidden) {
+      clearKeys();
+      if (phase === "play") {
+        phase = "pause";
+        pushHud(true);
+      }
+      writeSave({ ...save, best, sound: soundOn, shake: shakeOn });
+    } else {
+      last = performance.now();
+      if (soundOn) audio.unlock();
+    }
+  }
+
+  function onPadEdge() {
+    const pads = navigator.getGamepads?.();
+    if (!pads) return;
+    for (const g of pads) {
+      if (!g) continue;
+      const startBtn = g.buttons[9]?.pressed || g.buttons[8]?.pressed;
+      const confirm = g.buttons[0]?.pressed;
+      if (startBtn && !padWasStart) {
+        if (phase === "play" || phase === "pause") togglePause();
+        else if (phase === "title" || phase === "dead") start();
+      }
+      if (confirm && !padWasConfirm && (phase === "title" || phase === "dead")) start();
+      padWasStart = Boolean(startBtn);
+      padWasConfirm = Boolean(confirm);
+      return;
+    }
+    padWasStart = false;
+    padWasConfirm = false;
+  }
+
+  let padWasStart = false;
+  let padWasConfirm = false;
+  const padTimer = window.setInterval(onPadEdge, 50);
+
+  const GAME_KEYS = new Set([
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Space",
+    "KeyA",
+    "KeyD",
+    "KeyW",
+    "KeyS",
+    "KeyP",
+    "Escape",
+    "Enter",
+  ]);
+
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", clearKeys);
+  document.addEventListener("visibilitychange", onVis);
+  canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerUp);
+
+  const ro = new ResizeObserver(() => render());
+  ro.observe(canvas);
+
+  const probe: ControlsProbe = {
+    getYaw: () => 0,
+    getSpeed: () => (phase === "play" && dying <= 0 ? scrollSpeed() : 0),
+    getX: () => playerX,
+    setKeys: (codes: string[]) => {
+      injected = codes.slice();
+      pointerId = null;
+    },
+    setSteer: (v: number) => {
+      steerInject = v;
+      injected = null;
+      pointerId = null;
+    },
+    debug: () => {
+      let nearest = 9999;
+      for (const h of hazards) {
+        if (!h.alive) continue;
+        const cy = h.kind === "chip" ? h.y : h.y + h.h / 2;
+        nearest = Math.min(nearest, Math.abs(cy - PLAYER_Y));
+      }
+      return {
+        phase,
+        x: playerX,
+        dying,
+        hidden: document.hidden,
+        hazards: hazards.length,
+        gems: gemList.length,
+        nearest,
+      };
+    },
+  };
+  window.__controlsTest = probe;
+
+  pushHud(true);
+  raf = requestAnimationFrame(frame);
+
+  return {
+    start,
+    togglePause,
+    toggleSound,
+    toggleShake,
+    destroy() {
+      stopped = true;
+      cancelAnimationFrame(raf);
+      window.clearInterval(padTimer);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", clearKeys);
+      document.removeEventListener("visibilitychange", onVis);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
+      ro.disconnect();
+      audio.stop();
+      if (window.__controlsTest === probe) delete window.__controlsTest;
+    },
+  };
+}
+
+function padAxis() {
+  const pads = navigator.getGamepads?.();
+  if (!pads) return 0;
+  for (const g of pads) {
+    if (!g) continue;
+    const x = g.axes[0] ?? 0;
+    const y = g.axes[1] ?? 0;
+    const m = Math.hypot(x, y);
+    if (m < 0.18) continue;
+    const scaled = ((m - 0.18) / 0.82) * (x / m);
+    return clamp(scaled, -1, 1);
+  }
+  return 0;
+}
+
+function createMixer() {
+  let ctx: AudioContext | null = null;
+  let master: GainNode | null = null;
+  let sfx: GainNode | null = null;
+  let music: GainNode | null = null;
+  let nextAt = 0;
+  let step = 0;
+  let musicOn = false;
+  const notes = [146.83, 174.61, 196, 220, 174.61, 146.83, 130.81, 174.61];
+
+  function ensure() {
