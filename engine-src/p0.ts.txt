@@ -1,0 +1,250 @@
+export const FACES = [
+  {
+    id: 1,
+    name: "Swift",
+    blurb: "Quicker hands",
+    move: 1.5,
+    scroll: 1,
+    score: 1,
+    magnet: false,
+    smash: false,
+    ward: false,
+    echo: false,
+  },
+  {
+    id: 2,
+    name: "Heavy",
+    blurb: "Smash the chips",
+    move: 0.72,
+    scroll: 0.88,
+    score: 1,
+    magnet: false,
+    smash: true,
+    ward: false,
+    echo: false,
+  },
+  {
+    id: 3,
+    name: "Magnet",
+    blurb: "Gems lean toward you",
+    move: 1,
+    scroll: 1,
+    score: 1,
+    magnet: true,
+    smash: false,
+    ward: false,
+    echo: false,
+  },
+  {
+    id: 4,
+    name: "Ward",
+    blurb: "The next hit is free",
+    move: 1,
+    scroll: 1,
+    score: 1,
+    magnet: false,
+    smash: false,
+    ward: true,
+    echo: false,
+  },
+  {
+    id: 5,
+    name: "Blaze",
+    blurb: "Double score, faster shaft",
+    move: 1.08,
+    scroll: 1.24,
+    score: 2,
+    magnet: false,
+    smash: false,
+    ward: false,
+    echo: false,
+  },
+  {
+    id: 6,
+    name: "Echo",
+    blurb: "A ghost gathers gems",
+    move: 1,
+    scroll: 1,
+    score: 1,
+    magnet: false,
+    smash: false,
+    ward: false,
+    echo: true,
+  },
+] as const;
+
+export type FaceId = (typeof FACES)[number]["id"];
+export type Phase = "title" | "play" | "pause" | "dead";
+
+export type Hud = {
+  phase: Phase;
+  score: number;
+  best: number;
+  combo: number;
+  face: FaceId;
+  faceName: string;
+  faceBlurb: string;
+  faceT: number;
+  rolling: boolean;
+  ward: boolean;
+  gems: number;
+  nears: number;
+  seconds: number;
+  sound: boolean;
+  shake: boolean;
+  newBest: boolean;
+};
+
+export type LuckshiftApi = {
+  start: () => void;
+  togglePause: () => void;
+  toggleSound: () => void;
+  toggleShake: () => void;
+  destroy: () => void;
+};
+
+const VW = 420;
+const VH = 740;
+const PLAYER_Y = 568;
+const HIT_R = 12;
+const SAVE_KEY = "luckshift.save.v1";
+const STEP = 1 / 60;
+
+const INK = "#101614";
+const SHAFT = "#0e1512";
+const PAPER = "#efe7d6";
+const AMBER = "#e6a23c";
+const TEAL = "#2fbfa0";
+const CORAL = "#e15a45";
+const CHIP = "#c4553c";
+
+type Save = { version: 1; best: number; sound: boolean; shake: boolean };
+
+type Hazard = {
+  kind: "bar" | "chip";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  alive: boolean;
+  checked: boolean;
+};
+
+type Gem = { x: number; y: number; alive: boolean; spin: number };
+
+type Particle = {
+  alive: boolean;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  max: number;
+  size: number;
+  color: string;
+};
+
+type Floater = {
+  x: number;
+  y: number;
+  text: string;
+  life: number;
+  max: number;
+  color: string;
+};
+
+type ControlsProbe = {
+  getYaw: () => number;
+  getSpeed: () => number;
+  getX: () => number;
+  setKeys: (codes: string[]) => void;
+  setSteer: (v: number) => void;
+  debug: () => {
+    phase: Phase;
+    x: number;
+    dying: number;
+    hidden: boolean;
+    hazards: number;
+    gems: number;
+    nearest: number;
+  };
+};
+
+declare global {
+  interface Window {
+    __controlsTest?: ControlsProbe;
+  }
+}
+
+function clamp(v: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, v));
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function loadSave(): Save {
+  const fallback: Save = {
+    version: 1,
+    best: 0,
+    sound: true,
+    shake: !prefersReducedMotion(),
+  };
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<Save>;
+    if (parsed.version !== 1) return fallback;
+    return {
+      version: 1,
+      best: typeof parsed.best === "number" && parsed.best >= 0 ? parsed.best : 0,
+      sound: typeof parsed.sound === "boolean" ? parsed.sound : true,
+      shake: typeof parsed.shake === "boolean" ? parsed.shake : fallback.shake,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeSave(save: Save) {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+  } catch {
+    /* private mode / quota — keep playing */
+  }
+}
+
+export function createLuckshift(
+  canvas: HTMLCanvasElement,
+  emit: (hud: Hud) => void,
+): LuckshiftApi {
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return { start() {}, togglePause() {}, toggleSound() {}, toggleShake() {}, destroy() {} };
+  }
+  const ctx: CanvasRenderingContext2D = context;
+
+  const save = loadSave();
+  const keys = new Set<string>();
+  let injected: string[] | null = null;
+  let steerInject: number | null = null;
+  let pointerId: number | null = null;
+  let pointerX = VW / 2;
+  let layout = { scale: 1, ox: 0, oy: 0, cssW: 1, cssH: 1 };
+
+  let phase: Phase = "title";
+  let playerX = VW / 2;
+  let playerVx = 0;
+  let spin = 0.4;
+  let faceIndex = 0;
+  let rolling = false;
+  let timer = 5;
+  let timerMax = 5;
